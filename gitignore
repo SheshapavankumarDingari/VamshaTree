@@ -1,0 +1,25 @@
+# Python bytecode and cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual Environments & Environments
+venv/
+env/
+ENV/
+.env
+
+# Local SQLite Database Vault (Keeps your private data off GitHub)
+vamsha_vault.db
+
+# IDEs and Editors
+.vscode/
+.idea/
+
+# OS Specific Files
+.DS_Store
+Thumbs.db
+
+# Streamlit local state
+.streamlit/secrets.toml

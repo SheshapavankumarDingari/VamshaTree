@@ -2,6 +2,7 @@ import os
 import requests
 import streamlit as st
 from huggingface_hub import InferenceClient
+from concurrent.futures import ThreadPoolExecutor
 
 # --- 1. PAGE CONFIGURATION & THEME ---
 st.set_page_config(
@@ -46,17 +47,57 @@ st.markdown("""
         letter-spacing: 0.05em;
     }
 
-    /* Ultra-Modern Button & Card Styling */
-    div[data-testid="stButton"] button {
-        border-radius: 8px;
-        font-weight: 600;
-        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    /* FULL CARD BUTTON STYLING TRICK */
+    /* We style the Streamlit button container to look exactly like the visual card */
+    div[data-testid="stButton"] > button {
+        background: linear-gradient(135deg, #131c2e 0%, #0f172a 100%) !important;
+        border: 1px solid #334155 !important;
+        border-radius: 12px !important;
+        padding: 0 !important; /* Remove default padding so our inner HTML controls layout */
+        height: auto !important;
+        width: 100% !important;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        display: block !important;
     }
-    div[data-testid="stButton"] button:hover {
-        border-color: #3b82f6;
-        color: #3b82f6;
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+    
+    div[data-testid="stButton"] > button:hover {
+        border-color: #3b82f6 !important;
+        transform: translateY(-2px) !important;
+        box-shadow: 0 8px 20px -5px rgba(59, 130, 246, 0.2) !important;
+    }
+
+    /* The inner content of the clickable card */
+    .card-content {
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        text-align: center;
+        width: 100%;
+        height: 100%;
+    }
+
+    .profile-img {
+        width: 80px;
+        height: 80px;
+        border-radius: 50%;
+        object-fit: cover;
+        border: 2px solid #3b82f6;
+        margin-bottom: 12px;
+        background-color: #1e293b;
+    }
+    
+    .profile-placeholder {
+        width: 80px;
+        height: 80px;
+        border-radius: 50%;
+        background-color: #1e293b;
+        border: 2px solid #475569;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 32px;
+        margin-bottom: 12px;
     }
 
     /* Wikipedia Banner */
@@ -92,7 +133,7 @@ selected_model = st.sidebar.selectbox(
     index=0
 )
 
-# --- 3. STATE MANAGEMENT FOR PRESETS ---
+# --- 3. STATE MANAGEMENT FOR PRESETS & RESULTS ---
 if "char_query" not in st.session_state:
     st.session_state.char_query = ""
 if "uni_query" not in st.session_state:
@@ -100,10 +141,15 @@ if "uni_query" not in st.session_state:
 if "trigger_search" not in st.session_state:
     st.session_state.trigger_search = False
 
+# We store the generated results in session state so they don't disappear when a modal opens
+if "current_results" not in st.session_state:
+    st.session_state.current_results = None
+
 # --- 4. DATA FETCHING LOGIC ---
+@st.cache_data(show_spinner=False, ttl=3600)
 def fetch_wikipedia_data(query_term: str):
     url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{requests.utils.quote(query_term)}"
-    headers = {"User-Agent": "VamshaTree/3.0 (Educational)"}
+    headers = {"User-Agent": "VamshaTree/4.0 (Educational)"}
     
     try:
         response = requests.get(url, headers=headers, timeout=5)
@@ -157,22 +203,19 @@ def generate_relationships(character_name: str, universe: str, wiki_text: str, m
 
 # --- 5. NATIVE MODAL POPUP ---
 @st.dialog("Genealogical Profile", width="large")
-def show_character_modal(target_name: str, relation_type: str):
+def show_character_modal(target_name: str, relation_type: str, preloaded_summary: str, preloaded_image: str):
     st.markdown(f"<span style='color:#60a5fa; font-size:12px; font-weight:bold; text-transform:uppercase; letter-spacing:1px;'>{relation_type}</span>", unsafe_allow_html=True)
     st.markdown(f"<h2 style='color: #ffffff; margin-top: 0;'>{target_name}</h2>", unsafe_allow_html=True)
     
-    with st.spinner("Fetching authenticated records..."):
-        summary, image_url = fetch_wikipedia_data(target_name)
-    
     col1, col2 = st.columns([1, 2.5])
     with col1:
-        if image_url:
-            st.markdown(f"<img src='{image_url}' style='width: 100%; border-radius: 12px; border: 1px solid #334155;'>", unsafe_allow_html=True)
+        if preloaded_image:
+            st.markdown(f"<img src='{preloaded_image}' style='width: 100%; border-radius: 12px; border: 1px solid #334155;'>", unsafe_allow_html=True)
         else:
             st.markdown("<div style='width:100%; aspect-ratio:1; border-radius:12px; background:#1e293b; display:flex; align-items:center; justify-content:center; border: 1px solid #334155;'><span style='font-size:40px;'>👤</span></div>", unsafe_allow_html=True)
     with col2:
-        if summary:
-            st.markdown(f"<p style='color: #cbd5e1; font-size: 0.95rem; line-height: 1.6;'>{summary}</p>", unsafe_allow_html=True)
+        if preloaded_summary:
+            st.markdown(f"<p style='color: #cbd5e1; font-size: 0.95rem; line-height: 1.6;'>{preloaded_summary}</p>", unsafe_allow_html=True)
         else:
             st.info("Verified biographical summary not currently available on Wikipedia.")
             
@@ -214,54 +257,32 @@ if preset_cols[3].button("🐺 Odin (Norse Mythology)", use_container_width=True
 st.markdown("<hr style='border-color: #1e293b; margin: 30px 0;'>", unsafe_allow_html=True)
 
 # ==========================================
-# UI: SEARCH INPUTS (MODERN, NO LABELS)
+# UI: SEARCH INPUTS
 # ==========================================
 with st.container():
     col1, col2, col3 = st.columns([3, 3, 2])
     with col1:
-        # label_visibility="collapsed" hides the label entirely for a clean, modern look
         character = st.text_input("Entity Name", value=st.session_state.char_query, placeholder="Entity Name (e.g., Rama)", label_visibility="collapsed")
     with col2:
         universe = st.text_input("Universe / Context", value=st.session_state.uni_query, placeholder="Universe (e.g., Ramayana)", label_visibility="collapsed")
     with col3:
-        # Because the labels are collapsed, the button aligns perfectly without needing <br> spacing
         generate_btn = st.button("Generate Lineage", type="primary", use_container_width=True)
 
 # ==========================================
 # LOGIC: EXECUTE GENERATION
 # ==========================================
 if generate_btn or st.session_state.trigger_search:
-    st.session_state.trigger_search = False # Reset trigger
+    st.session_state.trigger_search = False
     
     if not character or not universe:
         st.warning("Please provide both an Entity Name and a Universe.")
     else:
-        with st.spinner("Extracting genealogical records..."):
+        with st.spinner("Extracting genealogical records & generating visuals..."):
             try:
-                # 1. Fetch Main Wikipedia Data
                 wiki_summary, wiki_image = fetch_wikipedia_data(f"{character} {universe}")
-
-                # Render Main Overview Banner (Only if summary exists)
-                if wiki_summary:
-                    banner_html = "<div class='wiki-banner'>"
-                    if wiki_image:
-                        banner_html += f"<img src='{wiki_image}' width='100' height='100' style='border-radius:8px; object-fit:cover; border: 1px solid #475569;'>"
-                    banner_html += f"""
-                        <div>
-                            <span style='background:#1e40af; color:#bfdbfe; font-size:10px; padding:3px 8px; border-radius:12px; font-weight:700; text-transform:uppercase;'>Verified Entity</span>
-                            <h3 style="color: #ffffff; margin: 4px 0 6px 0;">{character} ({universe})</h3>
-                            <p style="color: #cbd5e1; font-size: 0.9rem; margin: 0; line-height: 1.4;">{wiki_summary}</p>
-                        </div>
-                    </div>
-                    """
-                    st.markdown(banner_html, unsafe_allow_html=True)
-
-                # 2. Generate AI Relationships
                 raw_output = generate_relationships(character, universe, wiki_summary, selected_model)
 
-                # 3. Parse and strictly map into 3 Swimlanes
                 swimlanes = {"Parents": [], "Spouse & Kin": [], "Children": []}
-                
                 for line in raw_output.split("\n"):
                     if "|" in line and ":" in line:
                         clean = line.replace("-", "").strip()
@@ -272,34 +293,84 @@ if generate_btn or st.session_state.trigger_search:
                             relation = rel_info[0].strip()
                             target = rel_info[1].strip() if len(rel_info) > 1 else ""
                             desc = parts[2].strip()
-
                             if lane in swimlanes:
                                 swimlanes[lane].append({"relation": relation, "target": target, "desc": desc})
 
-                # 4. Render Interactive Swimlanes
-                st.markdown("<h2 style='margin-top: 20px; font-weight: 800; color: #f8fafc;'>Kinship Networks</h2>", unsafe_allow_html=True)
-                
-                for lane_name, items in swimlanes.items():
-                    if items:
-                        st.markdown(f"""
-                            <div class="swimlane-container">
-                                <div class="swimlane-header">{lane_name}</div>
-                        """, unsafe_allow_html=True)
-                        
-                        cols = st.columns(min(len(items), 4))
-                        for idx, card in enumerate(items):
-                            with cols[idx % 4]:
-                                # Native Interactive Streamlit Card Structure
-                                with st.container(border=True):
-                                    st.markdown(f"<div style='color:#60a5fa; font-size:11px; font-weight:700; text-transform:uppercase; margin-bottom:5px;'>{card['relation']}</div>", unsafe_allow_html=True)
-                                    
-                                    # The character's name serves as the primary action button to open the modal
-                                    if st.button(f"👤 {card['target']}", key=f"modal_btn_{lane_name}_{idx}_{card['target']}", use_container_width=True):
-                                        show_character_modal(card['target'], card['relation'])
-                                        
-                                    st.markdown(f"<div style='color:#94a3b8; font-size:12px; line-height:1.3; margin-top:5px;'>{card['desc']}</div>", unsafe_allow_html=True)
-                                    
-                        st.markdown("</div>", unsafe_allow_html=True)
+                all_targets = [item['target'] for lane in swimlanes.values() for item in lane]
+                target_data_map = {}
+                def fetch_and_map(target_name):
+                    return target_name, fetch_wikipedia_data(target_name)
+
+                with ThreadPoolExecutor(max_workers=10) as executor:
+                    results = executor.map(fetch_and_map, all_targets)
+                    for t_name, data in results:
+                        target_data_map[t_name] = {"summary": data[0], "image": data[1]}
+
+                # Save results to session state so they survive the modal rerun
+                st.session_state.current_results = {
+                    "character": character,
+                    "universe": universe,
+                    "summary": wiki_summary,
+                    "image": wiki_image,
+                    "swimlanes": swimlanes,
+                    "target_data": target_data_map
+                }
 
             except Exception as err:
                 st.error(f"❌ Generation interrupted: {str(err)}")
+
+# ==========================================
+# UI: RENDER RESULTS (From Session State)
+# ==========================================
+if st.session_state.current_results:
+    res = st.session_state.current_results
+    
+    if res["summary"]:
+        banner_html = "<div class='wiki-banner'>"
+        if res["image"]:
+            banner_html += f"<img src='{res['image']}' width='100' height='100' style='border-radius:8px; object-fit:cover; border: 1px solid #475569;'>"
+        banner_html += f"""
+            <div>
+                <span style='background:#1e40af; color:#bfdbfe; font-size:10px; padding:3px 8px; border-radius:12px; font-weight:700; text-transform:uppercase;'>Verified Entity</span>
+                <h3 style="color: #ffffff; margin: 4px 0 6px 0;">{res['character']} ({res['universe']})</h3>
+                <p style="color: #cbd5e1; font-size: 0.9rem; margin: 0; line-height: 1.4;">{res['summary']}</p>
+            </div>
+        </div>
+        """
+        st.markdown(banner_html, unsafe_allow_html=True)
+
+    st.markdown("<h2 style='margin-top: 20px; font-weight: 800; color: #f8fafc;'>Kinship Networks</h2>", unsafe_allow_html=True)
+    
+    for lane_name, items in res["swimlanes"].items():
+        if items:
+            st.markdown(f"""
+                <div class="swimlane-container">
+                    <div class="swimlane-header">{lane_name}</div>
+            """, unsafe_allow_html=True)
+            
+            cols = st.columns(min(len(items), 4))
+            for idx, card in enumerate(items):
+                with cols[idx % 4]:
+                    target_info = res["target_data"].get(card['target'], {"summary": "", "image": None})
+                    img_url = target_info["image"]
+                    
+                    # Create the inner HTML content for the card
+                    if img_url:
+                        img_html = f"<img src='{img_url}' class='profile-img'>"
+                    else:
+                        img_html = "<div class='profile-placeholder'>👤</div>"
+                        
+                    card_content = f"""
+                    <div class='card-content'>
+                        {img_html}
+                        <div style='color:#60a5fa; font-size:10px; font-weight:800; text-transform:uppercase; margin-bottom:4px;'>{card['relation']}</div>
+                        <div style='color:#ffffff; font-size:1.1rem; font-weight:700; margin-bottom:6px;'>{card['target']}</div>
+                        <div style='color:#94a3b8; font-size:0.8rem; line-height:1.4; white-space: normal;'>{card['desc']}</div>
+                    </div>
+                    """
+                    
+                    # Streamlit button renders the HTML inside it, making the entire card clickable
+                    if st.button(card_content, key=f"btn_{lane_name}_{idx}_{card['target']}", use_container_width=True):
+                        show_character_modal(card['target'], card['relation'], target_info["summary"], img_url)
+                        
+            st.markdown("</div>", unsafe_allow_html=True)

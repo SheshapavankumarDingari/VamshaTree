@@ -26,12 +26,8 @@ st.markdown("""
     [data-testid="stSidebar"] * {
         color: #f8fafc !important;
     }
-    .stSelectbox label, .stTextInput label {
-        color: #f8fafc !important;
-        font-weight: 600 !important;
-    }
 
-    /* Swimlane Containers */
+    /* Modern Swimlane Containers */
     .swimlane-container {
         background: rgba(15, 23, 42, 0.4);
         border: 1px solid #1e293b;
@@ -50,15 +46,17 @@ st.markdown("""
         letter-spacing: 0.05em;
     }
 
-    /* Interactive Native Card Button Styling */
+    /* Ultra-Modern Button & Card Styling */
     div[data-testid="stButton"] button {
         border-radius: 8px;
         font-weight: 600;
-        transition: all 0.2s ease;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
     }
     div[data-testid="stButton"] button:hover {
         border-color: #3b82f6;
         color: #3b82f6;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
     }
 
     /* Wikipedia Banner */
@@ -71,6 +69,7 @@ st.markdown("""
         display: flex;
         gap: 20px;
         align-items: center;
+        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
     }
 
     #MainMenu {visibility: hidden;}
@@ -192,7 +191,7 @@ st.markdown("<p style='text-align: center; color: #94a3b8; font-size: 0.95rem; m
 # ==========================================
 # UI: FEATURED FIGURES PRESETS
 # ==========================================
-st.markdown("<p style='color: #cbd5e1; font-weight: 600; font-size: 0.9rem; margin-bottom: 10px;'>Featured Figures to Explore:</p>", unsafe_allow_html=True)
+st.markdown("<p style='color: #cbd5e1; font-weight: 600; font-size: 0.9rem; margin-bottom: 10px; text-align: center;'>Featured Figures to Explore:</p>", unsafe_allow_html=True)
 preset_cols = st.columns(4)
 
 if preset_cols[0].button("🏹 Arjuna (Mahabharata)", use_container_width=True):
@@ -215,16 +214,17 @@ if preset_cols[3].button("🐺 Odin (Norse Mythology)", use_container_width=True
 st.markdown("<hr style='border-color: #1e293b; margin: 30px 0;'>", unsafe_allow_html=True)
 
 # ==========================================
-# UI: SEARCH INPUTS
+# UI: SEARCH INPUTS (MODERN, NO LABELS)
 # ==========================================
 with st.container():
     col1, col2, col3 = st.columns([3, 3, 2])
     with col1:
-        character = st.text_input("Entity Name", value=st.session_state.char_query, placeholder="e.g., Rama")
+        # label_visibility="collapsed" hides the label entirely for a clean, modern look
+        character = st.text_input("Entity Name", value=st.session_state.char_query, placeholder="Entity Name (e.g., Rama)", label_visibility="collapsed")
     with col2:
-        universe = st.text_input("Universe / Context", value=st.session_state.uni_query, placeholder="e.g., Ramayana")
+        universe = st.text_input("Universe / Context", value=st.session_state.uni_query, placeholder="Universe (e.g., Ramayana)", label_visibility="collapsed")
     with col3:
-        st.markdown("<br>", unsafe_allow_html=True)
+        # Because the labels are collapsed, the button aligns perfectly without needing <br> spacing
         generate_btn = st.button("Generate Lineage", type="primary", use_container_width=True)
 
 # ==========================================

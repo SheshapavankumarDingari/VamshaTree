@@ -1,6 +1,7 @@
 import os
 import requests
 import re
+import wikipedia
 import streamlit as st
 from huggingface_hub import InferenceClient
 from concurrent.futures import ThreadPoolExecutor
@@ -15,9 +16,10 @@ st.markdown("""
     [data-testid="stSidebar"] * { color: #f8fafc !important; }
 
     /* Semantic Swimlane Containers */
-    .swimlane-Parents { border-top: 3px solid #a855f7 !important; }
-    .swimlane-Spouse { border-top: 3px solid #14b8a6 !important; }
-    .swimlane-Children { border-top: 3px solid #22c55e !important; }
+    .swimlane-Parents { border-top: 3px solid #a855f7 !important; } /* Purple */
+    .swimlane-Spouses { border-top: 3px solid #ec4899 !important; } /* Pink */
+    .swimlane-Kin { border-top: 3px solid #14b8a6 !important; } /* Teal */
+    .swimlane-Children { border-top: 3px solid #22c55e !important; } /* Green */
     
     .swimlane-container {
         background: rgba(15, 23, 42, 0.4); border: 1px solid #1e293b;
@@ -30,7 +32,6 @@ st.markdown("""
     }
 
     /* --- NATIVE STREAMLIT CARD STYLING --- */
-    /* Target Streamlit's native bordered containers to make them look like premium cards */
     div[data-testid="stVerticalBlockBorderWrapper"] {
         background: linear-gradient(135deg, #131c2e 0%, #0f172a 100%) !important;
         border: 1px solid #334155 !important;
@@ -43,21 +44,24 @@ st.markdown("""
         box-shadow: 0 10px 25px -5px rgba(59, 130, 246, 0.25) !important;
     }
 
-    /* Style the native button INSIDE the card to look like a sleek interactive title */
+    /* --- HIGH VISIBILITY BUTTON STYLING --- */
     div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stButton"] button {
-        background-color: rgba(59, 130, 246, 0.05) !important;
-        border: 1px solid rgba(59, 130, 246, 0.3) !important;
+        background-color: #2563eb !important; /* Strong Solid Blue */
+        border: none !important;
+        border-radius: 8px !important;
+        padding: 8px 0 !important;
+        margin-top: 8px !important;
+        min-height: 2.5rem !important;
+        transition: background-color 0.2s !important;
+    }
+    /* Force text inside button to be pure white */
+    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stButton"] button * {
         color: #ffffff !important;
         font-weight: 700 !important;
-        font-size: 1.05rem !important;
-        border-radius: 8px !important;
-        padding: 4px 0 !important;
-        margin: 4px 0 !important;
-        min-height: 2.5rem !important;
+        font-size: 1rem !important;
     }
     div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stButton"] button:hover {
-        background-color: #3b82f6 !important;
-        color: #ffffff !important;
+        background-color: #1d4ed8 !important; /* Darker blue on hover */
     }
 
     /* Wikipedia Banner */
@@ -82,16 +86,26 @@ if "current_results" not in st.session_state: st.session_state.current_results =
 st.sidebar.markdown("<h2 style='color: #f8fafc; font-weight: 800;'>⚙️ Engine Settings</h2>", unsafe_allow_html=True)
 selected_model = st.sidebar.selectbox("Choose AI Model", ["meta-llama/Llama-3.1-8B-Instruct", "mistralai/Mistral-7B-Instruct-v0.3", "Qwen/Qwen2.5-7B-Instruct"], index=0)
 
-# --- 4. DATA LOGIC ---
+# --- 4. HYBRID DATA LOGIC (Search + API) ---
 @st.cache_data(show_spinner=False, ttl=3600)
 def fetch_wikipedia_data(query_term: str):
-    url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{requests.utils.quote(query_term)}"
+    """Uses wikipedia search to find the exact contextual page, then fetches the clean summary API"""
     try:
-        res = requests.get(url, headers={"User-Agent": "VamshaTree/5.0"}, timeout=5)
+        # Step 1: Search for the most accurate page title (Prevents "Lava" volcano issue)
+        search_results = wikipedia.search(query_term, results=1)
+        if not search_results:
+            return "", None
+            
+        exact_page_title = search_results[0]
+        
+        # Step 2: Fetch the fast summary and thumbnail for that exact page
+        url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{requests.utils.quote(exact_page_title)}"
+        res = requests.get(url, headers={"User-Agent": "VamshaTree/6.0"}, timeout=5)
         if res.status_code == 200:
             data = res.json()
             return data.get("extract", ""), data.get("thumbnail", {}).get("source", None)
-    except: pass
+    except Exception: 
+        pass
     return "", None
 
 def get_hf_client():
@@ -102,13 +116,14 @@ def generate_relationships(character_name: str, universe: str, wiki_text: str, m
     client = get_hf_client()
     if not client: raise ValueError("Hugging Face Token missing!")
     
+    # Updated Prompt: Separates Spouses and Kin explicitly
     prompt = f"""
     Entity: '{character_name}'
     Universe: '{universe}'
     Context Overview: {wiki_text}
     
     Using your internal knowledge of mythology and history, map the family tree for this entity.
-    Extract ONLY family relationships and categorize each strictly into one of these three swimlanes: [Parents], [Spouse & Kin], or [Children].
+    Extract ONLY family relationships and categorize each strictly into one of these FOUR swimlanes: [Parents], [Spouses], [Kin], or [Children].
     
     Return the response strictly formatted as bullet points in this EXACT structure:
     - [Category] | Relation Type: Target Name | Short Attribute
@@ -117,7 +132,7 @@ def generate_relationships(character_name: str, universe: str, wiki_text: str, m
     response = client.chat.completions.create(
         model=model_name, 
         messages=[{"role": "system", "content": "You are a precise genealogical mapper."}, {"role": "user", "content": prompt}], 
-        max_tokens=600, temperature=0.2
+        max_tokens=600, temperature=0.1
     )
     return response.choices[0].message.content
 
@@ -132,10 +147,12 @@ def show_character_modal(target_name: str, relation_type: str, summary: str, ima
         if image: st.markdown(f"<img src='{image}' style='width: 100%; border-radius: 12px; border: 1px solid #334155;'>", unsafe_allow_html=True)
         else: st.markdown(f"<div style='width:100%; aspect-ratio:1; border-radius:12px; background:#1e293b; border: 2px solid #475569; display:flex; align-items:center; justify-content:center; font-size:40px; color:#94a3b8;'>{target_name[0] if target_name else '?'}</div>", unsafe_allow_html=True)
     with col2:
-        if summary: st.markdown(f"<p style='color: #cbd5e1; font-size: 0.95rem; line-height: 1.6;'>{summary}</p>", unsafe_allow_html=True)
+        # High contrast white text for the modal summary
+        if summary: st.markdown(f"<p style='color: #ffffff; font-size: 1.05rem; line-height: 1.6;'>{summary}</p>", unsafe_allow_html=True)
         else: st.info("Verified biographical summary not currently available on Wikipedia.")
     
     st.markdown("<hr style='border-color: #1e293b; margin: 20px 0;'>", unsafe_allow_html=True)
+    
     if st.button(f"🔍 Explore {target_name}'s Lineage", type="primary", use_container_width=True):
         st.session_state.char_query = target_name
         st.session_state.uni_query = universe 
@@ -165,24 +182,30 @@ if generate_btn or st.session_state.trigger_search:
 
         with st.spinner(f"Mapping kinship network for {character}..."):
             try:
+                # Main Contextual Search
                 wiki_summary, wiki_image = fetch_wikipedia_data(f"{character} {universe}")
                 raw_output = generate_relationships(character, universe, wiki_summary, selected_model)
 
-                swimlanes = {"Parents": [], "Spouse & Kin": [], "Children": []}
+                # Updated to separate Spouses and Kin
+                swimlanes = {"Parents": [], "Spouses": [], "Kin": [], "Children": []}
                 for line in raw_output.split("\n"):
                     clean_line = re.sub(r'^[\-\*\•]\s*', '', line.strip())
                     match = re.search(r'\[?([^\]|]+)\]?\s*\|\s*([^:]+):\s*([^|]+)\|\s*(.*)', clean_line)
                     if match:
                         raw_category = match.group(1).strip().lower()
                         rel, tgt, desc = match.group(2).strip(), match.group(3).strip(), match.group(4).strip()
+                        
                         if "parent" in raw_category: swimlanes["Parents"].append({"relation": rel, "target": tgt, "desc": desc})
-                        elif "spouse" in raw_category or "kin" in raw_category: swimlanes["Spouse & Kin"].append({"relation": rel, "target": tgt, "desc": desc})
+                        elif "spouse" in raw_category: swimlanes["Spouses"].append({"relation": rel, "target": tgt, "desc": desc})
+                        elif "kin" in raw_category or "sibling" in raw_category: swimlanes["Kin"].append({"relation": rel, "target": tgt, "desc": desc})
                         elif "child" in raw_category: swimlanes["Children"].append({"relation": rel, "target": tgt, "desc": desc})
 
                 all_targets = [item['target'] for lane in swimlanes.values() for item in lane]
                 target_data_map = {}
+                
+                # Fetch target data contextually! (e.g., "Lava Ramayana" instead of just "Lava")
                 with ThreadPoolExecutor(max_workers=10) as executor:
-                    for t_name, data in executor.map(lambda t: (t, fetch_wikipedia_data(t)), all_targets):
+                    for t_name, data in executor.map(lambda t: (t, fetch_wikipedia_data(f"{t} {universe}")), all_targets):
                         target_data_map[t_name] = {"summary": data[0], "image": data[1]}
 
                 st.session_state.current_results = { "character": character, "universe": universe, "summary": wiki_summary, "image": wiki_image, "swimlanes": swimlanes, "target_data": target_data_map }
@@ -213,9 +236,7 @@ if st.session_state.current_results:
                 with cols[idx % 4]:
                     t_info = res["target_data"].get(card['target'], {"summary": "", "image": None})
                     
-                    # Wrap everything inside a native bordered container
                     with st.container(border=True):
-                        # 1. Profile Image & Label (HTML)
                         fallback = card['target'][0] if card['target'] else "?"
                         if t_info['image']:
                             img_html = f"<img src='{t_info['image']}' style='width:70px; height:70px; border-radius:50%; object-fit:cover; border: 2px solid #3b82f6; display:block; margin: 0 auto 8px auto;'>"
@@ -224,11 +245,10 @@ if st.session_state.current_results:
                         
                         st.markdown(f"<div style='text-align:center;'>{img_html}<div style='color:#60a5fa; font-size:10px; font-weight:800; text-transform:uppercase; margin-bottom:4px;'>{card['relation']}</div></div>", unsafe_allow_html=True)
                         
-                        # 2. Interactive Native Button (Safe)
+                        # Now highly visible!
                         if st.button(card['target'], key=f"btn_{lane_name}_{idx}_{card['target']}", use_container_width=True):
                             show_character_modal(card['target'], card['relation'], t_info["summary"], t_info["image"], res["universe"])
                             
-                        # 3. Description (HTML)
                         st.markdown(f"<div style='color:#94a3b8; font-size:0.8rem; line-height:1.4; text-align:center; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;'>{card['desc']}</div>", unsafe_allow_html=True)
 
             st.markdown("</div>", unsafe_allow_html=True)

@@ -44,32 +44,40 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. GEMINI CLIENT INITIALIZATION ---
-# Safely pulls API key from Streamlit Secrets or environment variables
+# --- 2. SIDEBAR MODEL CONFIGURATION DROPDOWN ---
+st.sidebar.markdown("<h2 style='color: #f8fafc; font-weight: 800;'>⚙️ Engine Settings</h2>", unsafe_allow_html=True)
+st.sidebar.markdown("<p style='font-size: 11px; color: #94a3b8;'>Select your target Gemini model dynamically without touching code.</p>", unsafe_allow_html=True)
+
+selected_model = st.sidebar.selectbox(
+    "Choose Gemini Model",
+    options=["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash", "gemini-2.5-flash"],
+    index=0 # Defaults to gemini-1.5-flash (most universally stable)
+)
+
+# --- 3. GEMINI CLIENT INITIALIZATION ---
 def get_gemini_client():
     api_key = st.secrets.get("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY")
     if not api_key:
         return None
     return genai.Client(api_key=api_key)
 
-# --- 3. CORE STORYMAP EXTRACTION FUNCTION ---
-def generate_story_map_data(character_name: str, context_universe: str):
+# --- 4. CORE STORYMAP EXTRACTION FUNCTION ---
+def generate_story_map_data(character_name: str, context_universe: str, model_name: str):
     client = get_gemini_client()
     if not client:
-        raise ValueError("Gemini API Key missing! Please configure GEMINI_API_KEY in your Streamlit Secrets or environment.")
+        raise ValueError("Gemini API Key missing! Please configure GEMINI_API_KEY in your Streamlit Secrets.")
 
     # 1. Scrape Wikipedia page
     try:
         wiki_page = wikipedia.page(f"{character_name} {context_universe}")
         raw_text = wiki_page.content[:15000] # Limit text length for token efficiency
     except wikipedia.exceptions.DisambiguationError as e:
-        # Fallback to first option if ambiguous
         wiki_page = wikipedia.page(e.options[0])
         raw_text = wiki_page.content[:15000]
     except Exception as e:
         raise RuntimeError(f"Wikipedia search failed: {str(e)}")
 
-    # 2. Prompt Gemini to structure relationships and attributes
+    # 2. Prompt Gemini using the model selected from the dropdown
     prompt = f"""
     You are an expert mythological and historical relationship mapper.
     Analyze the text below about '{character_name}' in the context of '{context_universe}'.
@@ -83,15 +91,15 @@ def generate_story_map_data(character_name: str, context_universe: str):
     """
 
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model=model_name,
         contents=prompt
     )
     return response.text
 
-# --- 4. STREAMLIT USER INTERFACE ---
+# --- 5. STREAMLIT USER INTERFACE ---
 st.markdown("<br>", unsafe_allow_html=True)
 st.markdown("<h1 style='text-align: center; font-size: 3rem; font-weight: 900;'>Story<span style='color: #3b82f6;'>Map</span> Generator</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: #94a3b8; font-size: 1rem; margin-bottom: 2rem;'>Scrape Wikipedia lore and extract structured relationship networks using Google Gemini.</p>", unsafe_allow_html=True)
+st.markdown(f"<p style='text-align: center; color: #94a3b8; font-size: 1rem; margin-bottom: 2rem;'>Active AI Engine: <strong style='color: #60a5fa;'>{selected_model}</strong></p>", unsafe_allow_html=True)
 
 # Input Form
 with st.container():
@@ -108,9 +116,9 @@ if generate_btn:
     if not character or not universe:
         st.warning("Please enter both a character name and context universe.")
     else:
-        with st.spinner(f"Mining Wikipedia & analyzing relationships for {character}..."):
+        with st.spinner(f"Mining Wikipedia & analyzing relationships using {selected_model}..."):
             try:
-                raw_output = generate_story_map_data(character, universe)
+                raw_output = generate_story_map_data(character, universe, selected_model)
                 
                 st.success(f"Successfully generated StoryMap for {character}!")
                 st.markdown(f"<h3 style='margin-top: 30px; font-weight: 700;'>Relationship & Attribute Graph</h3>", unsafe_allow_html=True)
@@ -140,7 +148,6 @@ if generate_btn:
                                 </div>
                             """, unsafe_allow_html=True)
                 else:
-                    # Fallback raw text view if formatting varies slightly
                     st.markdown(f"<div class='story-card'><p>{raw_output}</p></div>", unsafe_allow_html=True)
 
             except Exception as err:

@@ -1,7 +1,7 @@
 import os
 import requests
-import re
 import wikipedia
+import re
 import streamlit as st
 from huggingface_hub import InferenceClient
 from concurrent.futures import ThreadPoolExecutor
@@ -15,6 +15,9 @@ st.markdown("""
     .stApp { background-color: #0b0f19; color: #f8fafc; font-family: 'Inter', -apple-system, sans-serif; }
     [data-testid="stSidebar"] { background-color: #0f172a !important; border-right: 1px solid #1e293b !important; }
     [data-testid="stSidebar"] * { color: #f8fafc !important; }
+
+    /* SPECIFIC FIX: Guarantee high-contrast visibility for sidebar selectbox values */
+    [data-testid="stSidebar"] div[data-baseweb="select"] * { color: #f8fafc !important; background-color: #0f172a !important; }
 
     /* Semantic Swimlane Containers */
     .swimlane-Parents { border-top: 3px solid #a855f7 !important; }
@@ -48,24 +51,45 @@ st.markdown("""
 
     /* Wikipedia Banner */
     .wiki-banner { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); border: 1px solid #334155; border-radius: 16px; padding: 24px; margin-bottom: 20px; display: flex; gap: 24px; align-items: center; box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5); }
-    .breadcrumb { font-size: 0.85rem; color: #64748b; margin-bottom: 25px; padding: 10px 15px; background: rgba(30,41,59,0.5); border-radius: 8px; display: inline-block;}
-    .breadcrumb span { color: #3b82f6; font-weight: 600; }
     
     #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. CLEAN STATE MANAGEMENT ---
+# --- 2. STATE MANAGEMENT ---
 if "char_query" not in st.session_state: st.session_state.char_query = ""
 if "uni_query" not in st.session_state: st.session_state.uni_query = ""
-if "history" not in st.session_state: st.session_state.history = []
+if "trigger_search" not in st.session_state: st.session_state.trigger_search = False
 if "current_results" not in st.session_state: st.session_state.current_results = None
+if "search_history" not in st.session_state: st.session_state.search_history = []  # Stores (name, universe, image) tuples for this session
 
-# --- 3. SIDEBAR NAVIGATION ---
+# --- 3. SIDEBAR NAVIGATION & PRESETS ---
 st.sidebar.markdown("<h2 style='color: #f8fafc; font-weight: 800;'>⚙️ VamshaTree Engine</h2>", unsafe_allow_html=True)
 selected_model = st.sidebar.selectbox("AI Model", ["meta-llama/Llama-3.1-8B-Instruct", "mistralai/Mistral-7B-Instruct-v0.3", "Qwen/Qwen2.5-7B-Instruct"], index=0)
 
-# --- 4. CORE ENGINE FUNCTIONS ---
+st.sidebar.markdown("<hr style='border-color: #1e293b; margin: 20px 0;'>", unsafe_allow_html=True)
+st.sidebar.markdown("<h4 style='color: #f8fafc; font-weight: 700; margin-bottom: 10px;'>Session History</h4>", unsafe_allow_html=True)
+
+if not st.session_state.search_history:
+    st.sidebar.markdown("<p style='color: #64748b; font-size: 0.85rem;'>No searches yet this session.</p>", unsafe_allow_html=True)
+else:
+    # Render session search presets in the sidebar
+    for item in st.session_state.search_history:
+        h_name, h_uni, h_img = item
+        cols = st.sidebar.columns([1, 3])
+        with cols[0]:
+            if h_img:
+                st.markdown(f"<img src='{h_img}' style='width:32px; height:32px; border-radius:50%; object-fit:cover; border: 1px solid #3b82f6;'>", unsafe_allow_html=True)
+            else:
+                st.markdown(f"<div style='width:32px; height:32px; border-radius:50%; background:#1e293b; display:flex; align-items:center; justify-content:center; font-size:12px; color:#94a3b8;'>{h_name[0]}</div>", unsafe_allow_html=True)
+        with cols[1]:
+            if st.button(f"{h_name}", key=f"history_btn_{h_name}_{h_uni}", use_container_width=True):
+                st.session_state.char_query = h_name
+                st.session_state.uni_query = h_uni
+                st.session_state.trigger_search = True
+                st.rerun()
+
+# --- 4. DATA LOGIC ---
 @st.cache_data(show_spinner=False, ttl=3600)
 def fetch_wikipedia_data(character: str, universe: str):
     try:
@@ -78,7 +102,7 @@ def fetch_wikipedia_data(character: str, universe: str):
         if results:
             exact_title = results[0]
             url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{requests.utils.quote(exact_title)}"
-            res = requests.get(url, headers={"User-Agent": "VamshaTree/11.0"}, timeout=3)
+            res = requests.get(url, headers={"User-Agent": "VamshaTree/12.0"}, timeout=3)
             
             if res.status_code == 200:
                 data = res.json()
@@ -108,56 +132,6 @@ def generate_relationships(character_name: str, universe: str, wiki_text: str, m
     response = client.chat.completions.create(model=model_name, messages=[{"role": "system", "content": "You are a precise genealogical mapper."}, {"role": "user", "content": prompt}], max_tokens=800, temperature=0.1)
     return response.choices[0].message.content
 
-# --- SPECIFIC FIX: ENCAPSULATED SEARCH LOGIC ---
-# Moving this out of the button logic makes the UI updates incredibly stable
-def run_lineage_search(character, universe, model_name):
-    try:
-        wiki_summary, wiki_image = fetch_wikipedia_data(character, universe)
-        raw_output = generate_relationships(character, universe, wiki_summary, model_name)
-
-        swimlanes = {"Parents": [], "Spouses": [], "Kin": [], "Children": []}
-        
-        for line in raw_output.split("\n"):
-            line = line.strip(" -*•")
-            if "|" in line and ":" in line:
-                parts = line.split("|")
-                if len(parts) >= 2:
-                    raw_category = parts[0].strip(" []").lower()
-                    rest = "|".join(parts[1:])
-                    if ":" in rest:
-                        rel, target_desc = rest.split(":", 1)
-                        rel = rel.strip()
-                        if "|" in target_desc:
-                            tgt, desc = target_desc.split("|", 1)
-                        else:
-                            tgt, desc = target_desc, ""
-                            
-                        tgt, desc = tgt.strip(), desc.strip()
-                        
-                        if tgt:
-                            if "parent" in raw_category: swimlanes["Parents"].append({"relation": rel, "target": tgt, "desc": desc})
-                            elif "spouse" in raw_category: swimlanes["Spouses"].append({"relation": rel, "target": tgt, "desc": desc})
-                            elif "kin" in raw_category or "sibling" in raw_category: swimlanes["Kin"].append({"relation": rel, "target": tgt, "desc": desc})
-                            elif "child" in raw_category: swimlanes["Children"].append({"relation": rel, "target": tgt, "desc": desc})
-
-        all_targets = [item['target'] for lane in swimlanes.values() for item in lane]
-        target_data_map = {}
-        
-        with ThreadPoolExecutor(max_workers=3) as executor:
-            for t_name, data in executor.map(lambda t: (t, fetch_wikipedia_data(t, universe)), all_targets):
-                target_data_map[t_name] = {"summary": data[0], "image": data[1]}
-
-        # Update Breadcrumb History
-        if not st.session_state.history or st.session_state.history[-1] != character:
-            st.session_state.history.append(character)
-
-        # Store Results globally
-        st.session_state.current_results = { "character": character, "universe": universe, "summary": wiki_summary, "image": wiki_image, "swimlanes": swimlanes, "target_data": target_data_map }
-        return True
-    except Exception as err: 
-        st.error(f"❌ Generation Error: {str(err)}")
-        return False
-
 # --- 5. INTERACTIVE MODAL ---
 @st.dialog("Genealogical Profile", width="large")
 def show_character_modal(target_name: str, relation_type: str, summary: str, image: str, universe: str):
@@ -166,33 +140,20 @@ def show_character_modal(target_name: str, relation_type: str, summary: str, ima
     
     col1, col2 = st.columns([1, 2.5])
     with col1:
-        if image: 
-            st.image(image, use_column_width=True)
-        else: 
-            st.info("No verified profile image found.")
+        if image: st.image(image, use_column_width=True)
+        else: st.info("No verified profile image found.")
     with col2:
-        if summary: 
-            st.write(summary) 
-        else: 
-            st.warning("Verified biographical summary not currently available on Wikipedia.")
+        if summary: st.write(summary)
+        else: st.warning("Verified biographical summary not currently available on Wikipedia.")
     
     st.divider()
     
-    # SPECIFIC FIX: In-Modal Status Loader before closing!
     if st.button(f"Explore Lineage for {target_name} ➔", type="primary", use_container_width=True):
         st.session_state.char_query = target_name
         st.session_state.uni_query = universe 
-        
-        # Provides instant visual feedback *inside* the modal so the button doesn't "freeze"
-        with st.status(f"Mapping lineage for {target_name}...", expanded=True) as status:
-            st.write("Connecting to VamshaTree Engine...")
-            success = run_lineage_search(target_name, universe, selected_model)
-            
-            if success:
-                status.update(label="Complete! Rendering Tree...", state="complete")
-                st.rerun() # Instantly closes modal once data is ready
-            else:
-                status.update(label="Error occurred during mapping.", state="error")
+        st.session_state.current_results = None  
+        st.session_state.trigger_search = True   
+        st.rerun()  
 
 # --- UI HEADER ---
 st.markdown("<br><h1 style='text-align: center; font-size: 3.5rem; font-weight: 900; color: #ffffff; letter-spacing: -1px;'>Vamsha<span style='color: #3b82f6;'>Tree</span></h1>", unsafe_allow_html=True)
@@ -205,15 +166,56 @@ with st.container():
     with col2: universe = st.text_input("Universe", value=st.session_state.uni_query, placeholder="Universe/Context (e.g., Ramayana)", label_visibility="collapsed")
     with col3: generate_btn = st.button("Map Lineage", type="primary", use_container_width=True)
 
-if st.session_state.history:
-    path = " ➔ ".join([f"<span>{h}</span>" for h in st.session_state.history])
-    st.markdown(f"<div class='breadcrumb'>Exploration Path: {path}</div>", unsafe_allow_html=True)
-
-# --- EXECUTE FROM MAIN PAGE ---
-if generate_btn:
+# --- LOGIC EXECUTION ---
+if generate_btn or st.session_state.trigger_search:
+    st.session_state.trigger_search = False
     if character and universe:
         with st.spinner(f"Mapping kinship network for {character}..."):
-            run_lineage_search(character, universe, selected_model)
+            try:
+                wiki_summary, wiki_image = fetch_wikipedia_data(character, universe)
+                
+                # Update Session History Presets safely (Avoid duplicates)
+                history_entry = (character, universe, wiki_image)
+                if history_entry not in st.session_state.search_history:
+                    st.session_state.search_history.append(history_entry)
+
+                raw_output = generate_relationships(character, universe, wiki_summary, selected_model)
+
+                swimlanes = {"Parents": [], "Spouses": [], "Kin": [], "Children": []}
+                
+                for line in raw_output.split("\n"):
+                    line = line.strip(" -*•")
+                    if "|" in line and ":" in line:
+                        parts = line.split("|")
+                        if len(parts) >= 2:
+                            raw_category = parts[0].strip(" []").lower()
+                            rest = "|".join(parts[1:])
+                            if ":" in rest:
+                                rel, target_desc = rest.split(":", 1)
+                                rel = rel.strip()
+                                if "|" in target_desc:
+                                    tgt, desc = target_desc.split("|", 1)
+                                else:
+                                    tgt, desc = target_desc, ""
+                                    
+                                tgt, desc = tgt.strip(), desc.strip()
+                                
+                                if tgt:
+                                    if "parent" in raw_category: swimlanes["Parents"].append({"relation": rel, "target": tgt, "desc": desc})
+                                    elif "spouse" in raw_category: swimlanes["Spouses"].append({"relation": rel, "target": tgt, "desc": desc})
+                                    elif "kin" in raw_category or "sibling" in raw_category: swimlanes["Kin"].append({"relation": rel, "target": tgt, "desc": desc})
+                                    elif "child" in raw_category: swimlanes["Children"].append({"relation": rel, "target": tgt, "desc": desc})
+
+                all_targets = [item['target'] for lane in swimlanes.values() for item in lane]
+                target_data_map = {}
+                
+                with ThreadPoolExecutor(max_workers=3) as executor:
+                    for t_name, data in executor.map(lambda t: (t, fetch_wikipedia_data(t, universe)), all_targets):
+                        target_data_map[t_name] = {"summary": data[0], "image": data[1]}
+
+                st.session_state.current_results = { "character": character, "universe": universe, "summary": wiki_summary, "image": wiki_image, "swimlanes": swimlanes, "target_data": target_data_map }
+            except Exception as err: 
+                st.error(f"❌ Generation Error: {str(err)}")
 
 # --- RESULTS RENDERING ---
 if st.session_state.current_results:

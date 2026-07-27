@@ -57,12 +57,18 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. STATE MANAGEMENT (Includes UX History Tracking) ---
-if "char_query" not in st.session_state: st.session_state.char_query = ""
-if "uni_query" not in st.session_state: st.session_state.uni_query = ""
-if "trigger_search" not in st.session_state: st.session_state.trigger_search = False
-if "history" not in st.session_state: st.session_state.history = []
-if "current_results" not in st.session_state: st.session_state.current_results = None
+# --- 2. ROBUST STATE MANAGEMENT (CRITICAL FIX) ---
+# We must explicitly define all state variables here before the app tries to read them.
+if "char_query" not in st.session_state:
+    st.session_state.char_query = ""
+if "uni_query" not in st.session_state:
+    st.session_state.uni_query = ""
+if "trigger_search" not in st.session_state:
+    st.session_state.trigger_search = False
+if "history" not in st.session_state:
+    st.session_state.history = []
+if "current_results" not in st.session_state:
+    st.session_state.current_results = None
 
 # --- 3. SIDEBAR ---
 st.sidebar.markdown("<h2 style='color: #f8fafc; font-weight: 800;'>⚙️ Engine Settings</h2>", unsafe_allow_html=True)
@@ -100,7 +106,9 @@ def show_character_modal(target_name: str, relation_type: str, summary: str, ima
     col1, col2 = st.columns([1, 2.5])
     with col1:
         if image: st.markdown(f"<img src='{image}' style='width: 100%; border-radius: 12px; border: 1px solid #334155;'>", unsafe_allow_html=True)
-        else: st.markdown(f"<div class='profile-placeholder' style='width:100%; aspect-ratio:1; border-radius:12px;'>{target_name[0]}</div>", unsafe_allow_html=True)
+        else: 
+            fallback_char = target_name[0] if target_name else "?"
+            st.markdown(f"<div class='profile-placeholder' style='width:100%; aspect-ratio:1; border-radius:12px;'>{fallback_char}</div>", unsafe_allow_html=True)
     with col2:
         if summary: st.markdown(f"<p style='color: #cbd5e1; font-size: 0.95rem; line-height: 1.6;'>{summary}</p>", unsafe_allow_html=True)
         else: st.info("Verified biographical summary not currently available on Wikipedia.")
@@ -133,7 +141,7 @@ with st.container():
 if generate_btn or st.session_state.trigger_search:
     st.session_state.trigger_search = False
     if character and universe:
-        # Update History
+        # Update History cleanly
         if not st.session_state.history or st.session_state.history[-1] != character:
             st.session_state.history.append(character)
 
@@ -150,7 +158,8 @@ if generate_btn or st.session_state.trigger_search:
                         if len(parts) >= 3:
                             lane = parts[0].strip().replace("[", "").replace("]", "")
                             rel, tgt = parts[1].split(":")[0].strip(), parts[1].split(":")[1].strip() if ":" in parts[1] else ""
-                            if lane in swimlanes: swimlanes[lane].append({"relation": rel, "target": tgt, "desc": parts[2].strip()})
+                            if lane in swimlanes and tgt:
+                                swimlanes[lane].append({"relation": rel, "target": tgt, "desc": parts[2].strip()})
 
                 all_targets = [item['target'] for lane in swimlanes.values() for item in lane]
                 target_data_map = {}
@@ -162,13 +171,18 @@ if generate_btn or st.session_state.trigger_search:
             except Exception as err: st.error(f"❌ Generation interrupted: {str(err)}")
 
 # --- RESULTS RENDERING ---
+# This is where your code crashed before. It is now safely protected by the initialization block at the top.
 if st.session_state.current_results:
     res = st.session_state.current_results
     
     # Banner
     banner_html = f"<div class='wiki-banner'>"
-    if res['image']: banner_html += f"<img src='{res['image']}' width='90' height='90' style='border-radius:12px; object-fit:cover; border: 1px solid #475569;'>"
-    else: banner_html += f"<div class='profile-placeholder' style='width:90px; height:90px; border-radius:12px;'>{res['character'][0]}</div>"
+    if res['image']: 
+        banner_html += f"<img src='{res['image']}' width='90' height='90' style='border-radius:12px; object-fit:cover; border: 1px solid #475569;'>"
+    else: 
+        fallback = res['character'][0] if res['character'] else "?"
+        banner_html += f"<div class='profile-placeholder' style='width:90px; height:90px; border-radius:12px;'>{fallback}</div>"
+        
     banner_html += f"<div><span style='background:#1e40af; color:#bfdbfe; font-size:10px; padding:3px 8px; border-radius:12px; font-weight:700;'>Entity Origin</span><h3 style='color: #ffffff; margin: 4px 0 4px 0;'>{res['character']}</h3><p style='color: #cbd5e1; font-size: 0.85rem; margin: 0; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;'>{res['summary'] or 'Wiki data pending.'}</p></div></div>"
     st.markdown(banner_html, unsafe_allow_html=True)
 
@@ -181,7 +195,9 @@ if st.session_state.current_results:
             for idx, card in enumerate(items):
                 with cols[idx % 4]:
                     t_info = res["target_data"].get(card['target'], {"summary": "", "image": None})
-                    img_html = f"<img src='{t_info['image']}' class='profile-img'>" if t_info['image'] else f"<div class='profile-placeholder'>{card['target'][0]}</div>"
+                    
+                    fallback_char = card['target'][0] if card['target'] else "?"
+                    img_html = f"<img src='{t_info['image']}' class='profile-img'>" if t_info['image'] else f"<div class='profile-placeholder'>{fallback_char}</div>"
                     
                     content = f"<div class='card-content'>{img_html}<div style='color:#60a5fa; font-size:10px; font-weight:800; text-transform:uppercase; margin-bottom:4px;'>{card['relation']}</div><div class='card-title'>{card['target']}</div><div class='card-desc'>{card['desc']}</div></div>"
                     

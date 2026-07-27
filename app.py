@@ -7,7 +7,8 @@ from huggingface_hub import InferenceClient
 from concurrent.futures import ThreadPoolExecutor
 
 # --- 1. PAGE CONFIGURATION & THEME ---
-st.set_page_config(page_title="VamshaTree | Genealogical Intelligence", page_icon="🌳", layout="wide")
+# FORCES the sidebar to be open so the AI Model dropdown is always visible!
+st.set_page_config(page_title="VamshaTree | Genealogical Intelligence", page_icon="🌳", layout="wide", initial_sidebar_state="expanded")
 
 st.markdown("""
     <style>
@@ -21,7 +22,7 @@ st.markdown("""
     .swimlane-Spouses { border-top: 3px solid #ec4899 !important; }
     .swimlane-Kin { border-top: 3px solid #14b8a6 !important; }
     .swimlane-Children { border-top: 3px solid #22c55e !important; }
-
+    
     /* --- NATIVE STREAMLIT CARD STYLING --- */
     div[data-testid="stVerticalBlockBorderWrapper"] {
         border-radius: 16px !important;
@@ -35,23 +36,23 @@ st.markdown("""
         box-shadow: 0 12px 25px -5px rgba(59, 130, 246, 0.15) !important;
     }
 
-    /* --- SPECIFIC FIX: SOLID HIGH-CONTRAST BUTTON STYLING --- */
-    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stButton"] button {
-        background-color: #2563eb !important; /* Solid vibrant blue */
+    /* --- GLOBAL BUTTON OVERRIDE (FIXES INVISIBLE TEXT) --- */
+    /* This guarantees ALL buttons (Cards, Modal, Search) have bright white text and a blue background */
+    .stButton > button {
+        background-color: #2563eb !important;
         border: none !important;
         border-radius: 8px !important;
         margin-top: 5px !important;
         min-height: 2.5rem !important;
         transition: all 0.2s ease !important;
     }
-    /* Explicitly force white text on inner elements so it never goes invisible */
-    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stButton"] button p,
-    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stButton"] button span,
-    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stButton"] button div {
+    /* Forces Streamlit's dynamic inner text to be white */
+    .stButton > button * {
         color: #ffffff !important;
         font-weight: 700 !important;
+        font-size: 1rem !important;
     }
-    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stButton"] button:hover {
+    .stButton > button:hover {
         background-color: #1d4ed8 !important; /* Darker blue on hover */
         box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3) !important;
     }
@@ -66,17 +67,11 @@ st.markdown("""
 
     /* Lane Headers */
     .lane-header { font-size: 1.25rem; font-weight: 800; color: #f8fafc; margin-top: 2rem; margin-bottom: 1.5rem; border-bottom: 2px solid #1e293b; padding-bottom: 0.5rem; letter-spacing: 0.05em; text-transform: uppercase; }
-    .lane-Parents { border-bottom-color: #a855f7; }
-    .lane-Spouses { border-bottom-color: #ec4899; }
-    .lane-Kin { border-bottom-color: #14b8a6; }
-    .lane-Children { border-bottom-color: #22c55e; }
 
     /* Wikipedia Banner */
     .wiki-banner { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); border: 1px solid #334155; border-radius: 16px; padding: 24px; margin-bottom: 20px; display: flex; gap: 24px; align-items: center; box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5); }
     .breadcrumb { font-size: 0.85rem; color: #64748b; margin-bottom: 25px; padding: 10px 15px; background: rgba(30,41,59,0.5); border-radius: 8px; display: inline-block;}
     .breadcrumb span { color: #3b82f6; font-weight: 600; }
-    
-    #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -84,30 +79,42 @@ st.markdown("""
 if "char_query" not in st.session_state: st.session_state.char_query = ""
 if "uni_query" not in st.session_state: st.session_state.uni_query = ""
 if "trigger_search" not in st.session_state: st.session_state.trigger_search = False
-if "prepare_search" not in st.session_state: st.session_state.prepare_search = False  # NEW UX STATE
 if "history" not in st.session_state: st.session_state.history = []
 if "current_results" not in st.session_state: st.session_state.current_results = None
 
-# --- 3. SIDEBAR ---
+# --- 3. SIDEBAR NAVIGATION ---
 st.sidebar.markdown("<h2 style='color: #f8fafc; font-weight: 800;'>⚙️ VamshaTree Engine</h2>", unsafe_allow_html=True)
 selected_model = st.sidebar.selectbox("AI Model", ["meta-llama/Llama-3.1-8B-Instruct", "mistralai/Mistral-7B-Instruct-v0.3", "Qwen/Qwen2.5-7B-Instruct"], index=0)
 
 # --- 4. HYBRID DATA LOGIC ---
 @st.cache_data(show_spinner=False, ttl=3600)
 def fetch_wikipedia_data(character: str, universe: str):
+    """Robust 2-step fallback to ensure we ALWAYS get a summary."""
     try:
         search_query = f"{character} {universe}" if universe else character
         results = wikipedia.search(search_query, results=1)
-        if not results and universe:
-            results = wikipedia.search(character, results=1)
-            
+        
         if results:
             exact_title = results[0]
             url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{requests.utils.quote(exact_title)}"
-            res = requests.get(url, headers={"User-Agent": "VamshaTree/8.0 (Educational)"}, timeout=5)
+            res = requests.get(url, headers={"User-Agent": "VamshaTree/9.0"}, timeout=5)
             if res.status_code == 200:
                 data = res.json()
-                return data.get("extract", ""), data.get("thumbnail", {}).get("source", None)
+                summary = data.get("extract", "")
+                if summary: 
+                    return summary, data.get("thumbnail", {}).get("source", None)
+        
+        # Fallback (If context yielded empty summary, try just the character name)
+        if universe:
+            results = wikipedia.search(character, results=1)
+            if results:
+                exact_title = results[0]
+                url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{requests.utils.quote(exact_title)}"
+                res = requests.get(url, headers={"User-Agent": "VamshaTree/9.0"}, timeout=5)
+                if res.status_code == 200:
+                    data = res.json()
+                    return data.get("extract", ""), data.get("thumbnail", {}).get("source", None)
+                    
     except Exception: 
         pass
     return "", None
@@ -147,20 +154,25 @@ def show_character_modal(target_name: str, relation_type: str, summary: str, ima
     
     col1, col2 = st.columns([1, 2.5])
     with col1:
-        if image: st.image(image, use_column_width=True)
-        else: st.info("No verified profile image found.")
+        if image: 
+            st.image(image, use_column_width=True)
+        else: 
+            st.info("No verified profile image found.")
     with col2:
-        if summary: st.write(summary)
-        else: st.warning("Verified biographical summary not currently available on Wikipedia.")
+        if summary: 
+            st.write(summary)
+        else: 
+            st.warning("Verified biographical summary not currently available on Wikipedia.")
     
     st.divider()
     
-    # SPECIFIC FIX: Set prepare_search instead of trigger_search so modal closes instantly
-    if st.button(f"Explore Lineage for {target_name} ➔", type="primary", use_container_width=True):
+    # MODAL FIX: Clicking this immediately clears data and reruns, instantly closing the modal.
+    if st.button(f"Explore Lineage for {target_name} ➔", use_container_width=True):
         st.session_state.char_query = target_name
         st.session_state.uni_query = universe 
-        st.session_state.prepare_search = True 
-        st.rerun()
+        st.session_state.trigger_search = True
+        st.session_state.current_results = None  # Wipes old screen data instantly
+        st.rerun()  # Forces modal to close instantly
 
 # --- UI HEADER ---
 st.markdown("<br><h1 style='text-align: center; font-size: 3.5rem; font-weight: 900; color: #ffffff; letter-spacing: -1px;'>Vamsha<span style='color: #3b82f6;'>Tree</span></h1>", unsafe_allow_html=True)
@@ -171,19 +183,11 @@ with st.container():
     col1, col2, col3 = st.columns([3, 3, 2])
     with col1: character = st.text_input("Entity", value=st.session_state.char_query, placeholder="Entity Name (e.g., Rama)", label_visibility="collapsed")
     with col2: universe = st.text_input("Universe", value=st.session_state.uni_query, placeholder="Universe/Context (e.g., Ramayana)", label_visibility="collapsed")
-    with col3: generate_btn = st.button("Map Lineage", type="primary", use_container_width=True)
+    with col3: generate_btn = st.button("Map Lineage", use_container_width=True)
 
 if st.session_state.history:
     path = " ➔ ".join([f"<span>{h}</span>" for h in st.session_state.history])
     st.markdown(f"<div class='breadcrumb'>Exploration Path: {path}</div>", unsafe_allow_html=True)
-
-# --- SPECIFIC FIX: FAST UX MODAL CLOSING ---
-# If the modal button was clicked, we instantly close it and clear old data BEFORE doing heavy lifting
-if st.session_state.prepare_search:
-    st.session_state.prepare_search = False
-    st.session_state.trigger_search = True
-    st.session_state.current_results = None # Hides old UI instantly
-    st.rerun() # Forces a rapid frontend update
 
 # --- LOGIC EXECUTION ---
 if generate_btn or st.session_state.trigger_search:
@@ -192,6 +196,7 @@ if generate_btn or st.session_state.trigger_search:
         if not st.session_state.history or st.session_state.history[-1] != character:
             st.session_state.history.append(character)
 
+        # Spinner happens safely on the main page, NOT trapped inside the modal
         with st.spinner(f"Mapping kinship network for {character}..."):
             try:
                 wiki_summary, wiki_image = fetch_wikipedia_data(character, universe)

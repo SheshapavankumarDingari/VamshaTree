@@ -1,5 +1,6 @@
 import os
 import requests
+import re
 import streamlit as st
 from huggingface_hub import InferenceClient
 from concurrent.futures import ThreadPoolExecutor
@@ -57,18 +58,12 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- 2. ROBUST STATE MANAGEMENT (CRITICAL FIX) ---
-# We must explicitly define all state variables here before the app tries to read them.
-if "char_query" not in st.session_state:
-    st.session_state.char_query = ""
-if "uni_query" not in st.session_state:
-    st.session_state.uni_query = ""
-if "trigger_search" not in st.session_state:
-    st.session_state.trigger_search = False
-if "history" not in st.session_state:
-    st.session_state.history = []
-if "current_results" not in st.session_state:
-    st.session_state.current_results = None
+# --- 2. ROBUST STATE MANAGEMENT ---
+if "char_query" not in st.session_state: st.session_state.char_query = ""
+if "uni_query" not in st.session_state: st.session_state.uni_query = ""
+if "trigger_search" not in st.session_state: st.session_state.trigger_search = False
+if "history" not in st.session_state: st.session_state.history = []
+if "current_results" not in st.session_state: st.session_state.current_results = None
 
 # --- 3. SIDEBAR ---
 st.sidebar.markdown("<h2 style='color: #f8fafc; font-weight: 800;'>⚙️ Engine Settings</h2>", unsafe_allow_html=True)
@@ -141,7 +136,6 @@ with st.container():
 if generate_btn or st.session_state.trigger_search:
     st.session_state.trigger_search = False
     if character and universe:
-        # Update History cleanly
         if not st.session_state.history or st.session_state.history[-1] != character:
             st.session_state.history.append(character)
 
@@ -149,17 +143,40 @@ if generate_btn or st.session_state.trigger_search:
             try:
                 wiki_summary, wiki_image = fetch_wikipedia_data(f"{character} {universe}")
                 raw_output = generate_relationships(character, universe, wiki_summary, selected_model)
+                
+                # If you want to debug what the AI is actually outputting, uncomment the line below temporarily:
+                # st.write(raw_output)
 
                 swimlanes = {"Parents": [], "Spouse & Kin": [], "Children": []}
+                
+                # --- ROBUST FUZZY PARSING LOGIC ---
+                # We use regex to loosely match "[Category] | Relation: Target | Desc" regardless of spaces or dashes
                 for line in raw_output.split("\n"):
-                    if "|" in line and ":" in line:
-                        clean = line.replace("-", "").strip()
-                        parts = clean.split("|")
-                        if len(parts) >= 3:
-                            lane = parts[0].strip().replace("[", "").replace("]", "")
-                            rel, tgt = parts[1].split(":")[0].strip(), parts[1].split(":")[1].strip() if ":" in parts[1] else ""
-                            if lane in swimlanes and tgt:
-                                swimlanes[lane].append({"relation": rel, "target": tgt, "desc": parts[2].strip()})
+                    # Remove markdown bullets and clean the line
+                    clean_line = re.sub(r'^[\-\*\•]\s*', '', line.strip())
+                    
+                    # Fuzzy match the pattern using Regex
+                    match = re.search(r'\[(.*?)\]\s*\|\s*(.*?):\s*(.*?)\s*\|\s*(.*)', clean_line)
+                    
+                    if match:
+                        raw_category = match.group(1).strip()
+                        rel_type = match.group(2).strip()
+                        target = match.group(3).strip()
+                        desc = match.group(4).strip()
+                        
+                        # Soft match the category to our strict swimlanes
+                        matched_lane = None
+                        for key in swimlanes.keys():
+                            if key.split(" ")[0].lower() in raw_category.lower():
+                                matched_lane = key
+                                break
+                                
+                        if matched_lane and target:
+                            swimlanes[matched_lane].append({
+                                "relation": rel_type, 
+                                "target": target, 
+                                "desc": desc
+                            })
 
                 all_targets = [item['target'] for lane in swimlanes.values() for item in lane]
                 target_data_map = {}
@@ -171,7 +188,6 @@ if generate_btn or st.session_state.trigger_search:
             except Exception as err: st.error(f"❌ Generation interrupted: {str(err)}")
 
 # --- RESULTS RENDERING ---
-# This is where your code crashed before. It is now safely protected by the initialization block at the top.
 if st.session_state.current_results:
     res = st.session_state.current_results
     
@@ -185,6 +201,11 @@ if st.session_state.current_results:
         
     banner_html += f"<div><span style='background:#1e40af; color:#bfdbfe; font-size:10px; padding:3px 8px; border-radius:12px; font-weight:700;'>Entity Origin</span><h3 style='color: #ffffff; margin: 4px 0 4px 0;'>{res['character']}</h3><p style='color: #cbd5e1; font-size: 0.85rem; margin: 0; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;'>{res['summary'] or 'Wiki data pending.'}</p></div></div>"
     st.markdown(banner_html, unsafe_allow_html=True)
+
+    # Check if ANY swimlanes generated, if not show error/warning
+    total_relationships = sum(len(items) for items in res["swimlanes"].values())
+    if total_relationships == 0:
+         st.warning("⚠️ The AI Engine could not extract cleanly formatted relationship data from the Wikipedia summary for this entity. Try exploring a different character or using a different open-source model from the sidebar.")
 
     # Swimlanes
     for lane_name, items in res["swimlanes"].items():

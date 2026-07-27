@@ -13,14 +13,10 @@ st.markdown("""
     <style>
     /* Base Theme */
     .stApp { background-color: #0b0f19; color: #f8fafc; font-family: 'Inter', -apple-system, sans-serif; }
-    
-    /* SPECIFIC FIX: Pins the sidebar width and prevents auto-collapse on reruns */
-    [data-testid="stSidebar"] { 
-        background-color: #0f172a !important; 
-        border-right: 1px solid #1e293b !important; 
-        min-width: 280px !important;
-    }
+    [data-testid="stSidebar"] { background-color: #0f172a !important; border-right: 1px solid #1e293b !important; }
     [data-testid="stSidebar"] * { color: #f8fafc !important; }
+
+    /* SPECIFIC FIX: Guarantee high-contrast visibility for sidebar selectbox values */
     [data-testid="stSidebar"] div[data-baseweb="select"] * { color: #f8fafc !important; background-color: #0f172a !important; }
 
     /* Semantic Swimlane Containers */
@@ -65,7 +61,7 @@ if "char_query" not in st.session_state: st.session_state.char_query = ""
 if "uni_query" not in st.session_state: st.session_state.uni_query = ""
 if "trigger_search" not in st.session_state: st.session_state.trigger_search = False
 if "current_results" not in st.session_state: st.session_state.current_results = None
-if "search_history" not in st.session_state: st.session_state.search_history = [] 
+if "search_history" not in st.session_state: st.session_state.search_history = []  # Stores (name, universe, image) tuples for this session
 
 # --- 3. SIDEBAR NAVIGATION & PRESETS ---
 st.sidebar.markdown("<h2 style='color: #f8fafc; font-weight: 800;'>⚙️ VamshaTree Engine</h2>", unsafe_allow_html=True)
@@ -77,6 +73,7 @@ st.sidebar.markdown("<h4 style='color: #f8fafc; font-weight: 700; margin-bottom:
 if not st.session_state.search_history:
     st.sidebar.markdown("<p style='color: #64748b; font-size: 0.85rem;'>No searches yet this session.</p>", unsafe_allow_html=True)
 else:
+    # Render session search presets in the sidebar
     for item in st.session_state.search_history:
         h_name, h_uni, h_img = item
         cols = st.sidebar.columns([1, 3])
@@ -177,6 +174,7 @@ if generate_btn or st.session_state.trigger_search:
             try:
                 wiki_summary, wiki_image = fetch_wikipedia_data(character, universe)
                 
+                # Update Session History Presets safely (Avoid duplicates)
                 history_entry = (character, universe, wiki_image)
                 if history_entry not in st.session_state.search_history:
                     st.session_state.search_history.append(history_entry)
@@ -223,6 +221,7 @@ if generate_btn or st.session_state.trigger_search:
 if st.session_state.current_results:
     res = st.session_state.current_results
     
+    # Top Overview Banner
     banner_html = f"<div class='wiki-banner'>"
     if res['image']: 
         banner_html += f"<img src='{res['image']}' width='100' height='100' style='border-radius:50%; object-fit:cover; border: 3px solid #3b82f6;'>"
@@ -235,6 +234,7 @@ if st.session_state.current_results:
     if sum(len(items) for items in res["swimlanes"].values()) == 0:
          st.warning("⚠️ The AI Engine could not extract relationship data. Try providing a more specific Universe.")
 
+    # Swimlane Grid
     for lane_name, items in res["swimlanes"].items():
         if items:
             css_class = lane_name.split(" ")[0] 

@@ -21,7 +21,7 @@ st.markdown("""
     .swimlane-Spouses { border-top: 3px solid #ec4899 !important; }
     .swimlane-Kin { border-top: 3px solid #14b8a6 !important; }
     .swimlane-Children { border-top: 3px solid #22c55e !important; }
-    
+
     /* --- NATIVE STREAMLIT CARD STYLING --- */
     div[data-testid="stVerticalBlockBorderWrapper"] {
         border-radius: 16px !important;
@@ -35,7 +35,28 @@ st.markdown("""
         box-shadow: 0 12px 25px -5px rgba(59, 130, 246, 0.15) !important;
     }
 
-    /* HTML Card Internals (Safe, no forced button text colors) */
+    /* --- SPECIFIC FIX: SOLID HIGH-CONTRAST BUTTON STYLING --- */
+    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stButton"] button {
+        background-color: #2563eb !important; /* Solid vibrant blue */
+        border: none !important;
+        border-radius: 8px !important;
+        margin-top: 5px !important;
+        min-height: 2.5rem !important;
+        transition: all 0.2s ease !important;
+    }
+    /* Explicitly force white text on inner elements so it never goes invisible */
+    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stButton"] button p,
+    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stButton"] button span,
+    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stButton"] button div {
+        color: #ffffff !important;
+        font-weight: 700 !important;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stButton"] button:hover {
+        background-color: #1d4ed8 !important; /* Darker blue on hover */
+        box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3) !important;
+    }
+
+    /* HTML Card Internals */
     .card-img-container { display: flex; justify-content: center; margin-bottom: 12px; }
     .card-img { width: 75px; height: 75px; border-radius: 50%; object-fit: cover; border: 2px solid #3b82f6; box-shadow: 0 4px 10px rgba(0,0,0,0.4); }
     .card-fallback { width: 75px; height: 75px; border-radius: 50%; background: #1e293b; border: 2px solid #475569; display: flex; align-items: center; justify-content: center; font-size: 28px; font-weight: bold; color: #64748b; }
@@ -45,14 +66,17 @@ st.markdown("""
 
     /* Lane Headers */
     .lane-header { font-size: 1.25rem; font-weight: 800; color: #f8fafc; margin-top: 2rem; margin-bottom: 1.5rem; border-bottom: 2px solid #1e293b; padding-bottom: 0.5rem; letter-spacing: 0.05em; text-transform: uppercase; }
+    .lane-Parents { border-bottom-color: #a855f7; }
+    .lane-Spouses { border-bottom-color: #ec4899; }
+    .lane-Kin { border-bottom-color: #14b8a6; }
+    .lane-Children { border-bottom-color: #22c55e; }
 
     /* Wikipedia Banner */
     .wiki-banner { background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%); border: 1px solid #334155; border-radius: 16px; padding: 24px; margin-bottom: 20px; display: flex; gap: 24px; align-items: center; box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5); }
     .breadcrumb { font-size: 0.85rem; color: #64748b; margin-bottom: 25px; padding: 10px 15px; background: rgba(30,41,59,0.5); border-radius: 8px; display: inline-block;}
     .breadcrumb span { color: #3b82f6; font-weight: 600; }
     
-    /* REMOVED header {visibility: hidden;} SO THE SIDEBAR MENU BUTTON REMAINS VISIBLE */
-    #MainMenu {visibility: hidden;} footer {visibility: hidden;} 
+    #MainMenu {visibility: hidden;} footer {visibility: hidden;} header {visibility: hidden;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -60,43 +84,30 @@ st.markdown("""
 if "char_query" not in st.session_state: st.session_state.char_query = ""
 if "uni_query" not in st.session_state: st.session_state.uni_query = ""
 if "trigger_search" not in st.session_state: st.session_state.trigger_search = False
+if "prepare_search" not in st.session_state: st.session_state.prepare_search = False  # NEW UX STATE
 if "history" not in st.session_state: st.session_state.history = []
 if "current_results" not in st.session_state: st.session_state.current_results = None
 
-# --- 3. SIDEBAR NAVIGATION ---
+# --- 3. SIDEBAR ---
 st.sidebar.markdown("<h2 style='color: #f8fafc; font-weight: 800;'>⚙️ VamshaTree Engine</h2>", unsafe_allow_html=True)
 selected_model = st.sidebar.selectbox("AI Model", ["meta-llama/Llama-3.1-8B-Instruct", "mistralai/Mistral-7B-Instruct-v0.3", "Qwen/Qwen2.5-7B-Instruct"], index=0)
 
 # --- 4. HYBRID DATA LOGIC ---
 @st.cache_data(show_spinner=False, ttl=3600)
 def fetch_wikipedia_data(character: str, universe: str):
-    """Robust 2-step fallback to ensure we ALWAYS get a summary."""
     try:
-        # Step 1: Contextual Search
         search_query = f"{character} {universe}" if universe else character
         results = wikipedia.search(search_query, results=1)
-        
+        if not results and universe:
+            results = wikipedia.search(character, results=1)
+            
         if results:
             exact_title = results[0]
             url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{requests.utils.quote(exact_title)}"
-            res = requests.get(url, headers={"User-Agent": "VamshaTree/9.0"}, timeout=5)
+            res = requests.get(url, headers={"User-Agent": "VamshaTree/8.0 (Educational)"}, timeout=5)
             if res.status_code == 200:
                 data = res.json()
-                summary = data.get("extract", "")
-                if summary:  # Only return if summary is NOT empty
-                    return summary, data.get("thumbnail", {}).get("source", None)
-        
-        # Step 2: Fallback (If Step 1 yielded empty summary, try just the character name)
-        if universe:
-            results = wikipedia.search(character, results=1)
-            if results:
-                exact_title = results[0]
-                url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{requests.utils.quote(exact_title)}"
-                res = requests.get(url, headers={"User-Agent": "VamshaTree/9.0"}, timeout=5)
-                if res.status_code == 200:
-                    data = res.json()
-                    return data.get("extract", ""), data.get("thumbnail", {}).get("source", None)
-                    
+                return data.get("extract", ""), data.get("thumbnail", {}).get("source", None)
     except Exception: 
         pass
     return "", None
@@ -128,30 +139,27 @@ def generate_relationships(character_name: str, universe: str, wiki_text: str, m
     )
     return response.choices[0].message.content
 
-# --- 5. INTERACTIVE MODAL (Fully Native Typography) ---
+# --- 5. INTERACTIVE MODAL ---
 @st.dialog("Genealogical Profile", width="large")
 def show_character_modal(target_name: str, relation_type: str, summary: str, image: str, universe: str):
-    # Using Streamlit's native components guarantees visibility on both Light & Dark modes
     st.caption(f"**RELATIONSHIP:** {relation_type.upper()}")
     st.subheader(target_name)
     
     col1, col2 = st.columns([1, 2.5])
     with col1:
-        if image: 
-            st.image(image, use_column_width=True)
-        else: 
-            st.info("No verified profile image found.")
+        if image: st.image(image, use_column_width=True)
+        else: st.info("No verified profile image found.")
     with col2:
-        if summary: 
-            st.write(summary)
-        else: 
-            st.warning("Verified biographical summary not currently available on Wikipedia.")
+        if summary: st.write(summary)
+        else: st.warning("Verified biographical summary not currently available on Wikipedia.")
     
     st.divider()
+    
+    # SPECIFIC FIX: Set prepare_search instead of trigger_search so modal closes instantly
     if st.button(f"Explore Lineage for {target_name} ➔", type="primary", use_container_width=True):
         st.session_state.char_query = target_name
         st.session_state.uni_query = universe 
-        st.session_state.trigger_search = True
+        st.session_state.prepare_search = True 
         st.rerun()
 
 # --- UI HEADER ---
@@ -168,6 +176,14 @@ with st.container():
 if st.session_state.history:
     path = " ➔ ".join([f"<span>{h}</span>" for h in st.session_state.history])
     st.markdown(f"<div class='breadcrumb'>Exploration Path: {path}</div>", unsafe_allow_html=True)
+
+# --- SPECIFIC FIX: FAST UX MODAL CLOSING ---
+# If the modal button was clicked, we instantly close it and clear old data BEFORE doing heavy lifting
+if st.session_state.prepare_search:
+    st.session_state.prepare_search = False
+    st.session_state.trigger_search = True
+    st.session_state.current_results = None # Hides old UI instantly
+    st.rerun() # Forces a rapid frontend update
 
 # --- LOGIC EXECUTION ---
 if generate_btn or st.session_state.trigger_search:
@@ -234,7 +250,7 @@ if st.session_state.current_results:
     if sum(len(items) for items in res["swimlanes"].values()) == 0:
          st.warning("⚠️ The AI Engine could not extract relationship data. Try providing a more specific Universe.")
 
-    # Swimlane Grid 
+    # Swimlane Grid
     for lane_name, items in res["swimlanes"].items():
         if items:
             css_class = lane_name.split(" ")[0] 
@@ -252,7 +268,6 @@ if st.session_state.current_results:
                         else:
                             img_html = f"<div class='card-fallback'>{fallback}</div>"
                         
-                        # Card Graphics
                         card_html = f"""
                         <div class='card-img-container'>{img_html}</div>
                         <div class='card-relation'>{card['relation']}</div>
@@ -261,6 +276,5 @@ if st.session_state.current_results:
                         """
                         st.markdown(card_html, unsafe_allow_html=True)
                         
-                        # Standard Streamlit Button ensures text visibility!
                         if st.button("View Profile", key=f"btn_{lane_name}_{idx}_{card['target']}", use_container_width=True):
                             show_character_modal(card['target'], card['relation'], t_info["summary"], t_info["image"], res["universe"])

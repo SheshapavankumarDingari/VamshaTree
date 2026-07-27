@@ -1,24 +1,3 @@
-This is a brilliant UX catch. I have thought this through deeply, and I know exactly why the "Explore Lineage" button felt like it was freezing instead of closing the modal.
-
-### 🧠 The Deep Diagnosis: Streamlit's Execution Thread
-
-Streamlit scripts run top-to-bottom. When you clicked the modal button, it tried to run the 5-10 second Hugging Face/Wikipedia search *synchronously*. Because Python blocks the server during this wait, Streamlit could not send the "close the modal" command to your browser until the *entire search was already finished*. That’s why it grayed out and hung on the screen.
-
-### 🛠️ The Specific UX Fix (No Drastic Changes)
-
-Instead of relying on hacky "double reruns" or state triggers, I have **encapsulated the entire search logic into a single function (`run_lineage_search`)**.
-
-Now, when you click the button inside the modal:
-
-1. It immediately opens a visual `st.status` box **inside the modal itself** that says *"Mapping Lineage... Connecting to Engine"*.
-2. This gives you instant, satisfying visual feedback so you know the app hasn't frozen.
-3. Once the background process finishes, `st.rerun()` is called, the modal seamlessly vanishes, and the new tree is rendered on the main page.
-
-This makes the code much cleaner and fixes the hang perfectly. Please replace your `app.py` with this updated code:
-
-### 📂 Final Optimized `app.py`
-
-```python
 import os
 import requests
 import re
@@ -281,5 +260,3 @@ if st.session_state.current_results:
                         
                         if st.button("View Profile", key=f"btn_{lane_name}_{idx}_{card['target']}", type="primary", use_container_width=True):
                             show_character_modal(card['target'], card['relation'], t_info["summary"], t_info["image"], res["universe"])
-
-```

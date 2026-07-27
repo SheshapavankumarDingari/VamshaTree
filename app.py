@@ -88,11 +88,36 @@ def get_hf_client():
 def generate_relationships(character_name: str, universe: str, wiki_text: str, model_name: str):
     client = get_hf_client()
     if not client: raise ValueError("Hugging Face Token missing!")
-    prompt = f"""Analyze '{character_name}' from '{universe}':\n{wiki_text}\nExtract ONLY family relationships strictly into these swimlanes: [Parents], [Spouse & Kin], or [Children].\nFormat exactly as:\n- [Category] | [Relation Type]: [Target Name] | [Short Attribute]"""
-    response = client.chat.completions.create(model=model_name, messages=[{"role": "system", "content": "You are a precise genealogical mapper."}, {"role": "user", "content": prompt}], max_tokens=600, temperature=0.1)
+    
+    # CRITICAL FIX: Prompt instructs AI to use internal knowledge, as Wiki summary is too short.
+    prompt = f"""
+    Entity: '{character_name}'
+    Universe: '{universe}'
+    Context Overview: {wiki_text}
+    
+    Using your comprehensive internal knowledge of mythology and history, map the family tree for this entity.
+    Extract ONLY family relationships and categorize each strictly into one of these three swimlanes: [Parents], [Spouse & Kin], or [Children].
+    
+    Return the response strictly formatted as bullet points in this EXACT structure:
+    - [Category] | Relation Type: Target Name | Short Attribute
+    
+    Example:
+    - [Parents] | Father: Dasharatha | King of Ayodhya
+    - [Spouse & Kin] | Wife: Sita | Princess of Mithila
+    """
+    
+    response = client.chat.completions.create(
+        model=model_name, 
+        messages=[
+            {"role": "system", "content": "You are a precise genealogical mapper and historian."}, 
+            {"role": "user", "content": prompt}
+        ], 
+        max_tokens=600, 
+        temperature=0.2
+    )
     return response.choices[0].message.content
 
-# --- 5. INTERACTIVE MODAL (With Drill-Down UX) ---
+# --- 5. INTERACTIVE MODAL ---
 @st.dialog("Genealogical Profile", width="large")
 def show_character_modal(target_name: str, relation_type: str, summary: str, image: str, universe: str):
     st.markdown(f"<span style='color:#60a5fa; font-size:12px; font-weight:bold; text-transform:uppercase;'>{relation_type}</span>", unsafe_allow_html=True)
@@ -110,10 +135,9 @@ def show_character_modal(target_name: str, relation_type: str, summary: str, ima
     
     st.markdown("<hr style='border-color: #1e293b; margin: 20px 0;'>", unsafe_allow_html=True)
     
-    # UX UPGRADE: The Drill-Down Button
     if st.button(f"🔍 Explore {target_name}'s Lineage", type="primary", use_container_width=True):
         st.session_state.char_query = target_name
-        st.session_state.uni_query = universe # Keep same universe
+        st.session_state.uni_query = universe 
         st.session_state.trigger_search = True
         st.rerun()
 
@@ -143,40 +167,28 @@ if generate_btn or st.session_state.trigger_search:
             try:
                 wiki_summary, wiki_image = fetch_wikipedia_data(f"{character} {universe}")
                 raw_output = generate_relationships(character, universe, wiki_summary, selected_model)
-                
-                # If you want to debug what the AI is actually outputting, uncomment the line below temporarily:
-                # st.write(raw_output)
 
                 swimlanes = {"Parents": [], "Spouse & Kin": [], "Children": []}
                 
-                # --- ROBUST FUZZY PARSING LOGIC ---
-                # We use regex to loosely match "[Category] | Relation: Target | Desc" regardless of spaces or dashes
+                # CRITICAL FIX: Relaxed Regex to catch slightly varied AI outputs
                 for line in raw_output.split("\n"):
-                    # Remove markdown bullets and clean the line
                     clean_line = re.sub(r'^[\-\*\•]\s*', '', line.strip())
-                    
-                    # Fuzzy match the pattern using Regex
-                    match = re.search(r'\[(.*?)\]\s*\|\s*(.*?):\s*(.*?)\s*\|\s*(.*)', clean_line)
+                    # Looks for: [Category] | Relation: Target | Desc (with or without brackets)
+                    match = re.search(r'\[?([^\]|]+)\]?\s*\|\s*([^:]+):\s*([^|]+)\|\s*(.*)', clean_line)
                     
                     if match:
-                        raw_category = match.group(1).strip()
-                        rel_type = match.group(2).strip()
-                        target = match.group(3).strip()
+                        raw_category = match.group(1).strip().lower()
+                        rel = match.group(2).strip()
+                        tgt = match.group(3).strip()
                         desc = match.group(4).strip()
                         
-                        # Soft match the category to our strict swimlanes
-                        matched_lane = None
-                        for key in swimlanes.keys():
-                            if key.split(" ")[0].lower() in raw_category.lower():
-                                matched_lane = key
-                                break
-                                
-                        if matched_lane and target:
-                            swimlanes[matched_lane].append({
-                                "relation": rel_type, 
-                                "target": target, 
-                                "desc": desc
-                            })
+                        # Route to correct swimlane intelligently
+                        if "parent" in raw_category:
+                            swimlanes["Parents"].append({"relation": rel, "target": tgt, "desc": desc})
+                        elif "spouse" in raw_category or "kin" in raw_category:
+                            swimlanes["Spouse & Kin"].append({"relation": rel, "target": tgt, "desc": desc})
+                        elif "child" in raw_category:
+                            swimlanes["Children"].append({"relation": rel, "target": tgt, "desc": desc})
 
                 all_targets = [item['target'] for lane in swimlanes.values() for item in lane]
                 target_data_map = {}
@@ -202,7 +214,6 @@ if st.session_state.current_results:
     banner_html += f"<div><span style='background:#1e40af; color:#bfdbfe; font-size:10px; padding:3px 8px; border-radius:12px; font-weight:700;'>Entity Origin</span><h3 style='color: #ffffff; margin: 4px 0 4px 0;'>{res['character']}</h3><p style='color: #cbd5e1; font-size: 0.85rem; margin: 0; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;'>{res['summary'] or 'Wiki data pending.'}</p></div></div>"
     st.markdown(banner_html, unsafe_allow_html=True)
 
-    # Check if ANY swimlanes generated, if not show error/warning
     total_relationships = sum(len(items) for items in res["swimlanes"].values())
     if total_relationships == 0:
          st.warning("⚠️ The AI Engine could not extract cleanly formatted relationship data from the Wikipedia summary for this entity. Try exploring a different character or using a different open-source model from the sidebar.")
@@ -210,7 +221,7 @@ if st.session_state.current_results:
     # Swimlanes
     for lane_name, items in res["swimlanes"].items():
         if items:
-            css_class = lane_name.split(" ")[0] # Extracts "Parents", "Spouse", or "Children" for CSS targeting
+            css_class = lane_name.split(" ")[0] 
             st.markdown(f"<div class='swimlane-container swimlane-{css_class}'><div class='swimlane-header'>{lane_name}</div>", unsafe_allow_html=True)
             cols = st.columns(min(len(items), 4))
             for idx, card in enumerate(items):

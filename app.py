@@ -214,8 +214,9 @@ elif page == "Admin Portal":
     st.markdown("<p style='color: #94a3b8; font-size: 0.9rem;'>Manage proprietary database vault storage, telemetry, and system maintenance.</p>", unsafe_allow_html=True)
 
     admin_secret = st.text_input("Enter Admin Secret Key", type="password")
+    admin_password_vault = st.secrets.get("ADMIN_SECRET_KEY", "vamsha_admin_secret_2026")
     
-    if admin_secret == os.getenv("ADMIN_SECRET_KEY", "vamsha_admin_secret_2026"):
+    if admin_secret == admin_password_vault:
         db = SessionLocal()
         total_cached = db.query(CachedTree).count()
         db.close()
